@@ -11,9 +11,20 @@ const RAID_WINDOW_MS = 10_000;
 const RAID_THRESHOLD = 10;
 const recentJoins    = new Map();
 
+// أيدي الرتبة التي سيتم منحها تلقائياً
+const AUTO_ROLE_ID = '1499393262476329020';
+
 export async function execute(member) {
   const { guild } = member;
   const now = Date.now();
+
+  // ─── منح الرتبة تلقائياً فور الدخول ─────────────────────────────────────
+  const role = guild.roles.cache.get(AUTO_ROLE_ID);
+  if (role) {
+    member.roles.add(role).catch(() => {
+      console.log(`[FX9-SYS] فشل إضافة الرتبة - تأكد أن رتبة البوت أعلى من الرتبة المراد منحها.`);
+    });
+  }
 
   // ─── كشف الـ Raid ────────────────────────────────────────────────────────
   const joins = (recentJoins.get(guild.id) ?? []).filter(t => now - t < RAID_WINDOW_MS);
@@ -35,7 +46,7 @@ export async function execute(member) {
               'يُنصح بتفعيل التحقق أو تقييد الدخول مؤقتاً.'
             )
             .addFields(
-              { name: '📊 الموجة',      value: `${joins.length} / 10ث`, inline: true },
+              { name: '📊 الموجة',     value: `${joins.length} / 10ث`, inline: true },
               { name: '👥 الإجمالي',    value: `${guild.memberCount}`,   inline: true },
             )
         ],
@@ -47,7 +58,7 @@ export async function execute(member) {
   const isNewAccount   = accountAgeDays < 7;
   const avatarURL      = member.user.displayAvatarURL({ dynamic: true, size: 512 });
 
-  // ─── بطاقة الترحيب — نظيفة واحترافية ─────────────────────────────────
+  // ─── بطاقة الترحيب ─────────────────────────────────
   if (welcomeCh) {
     const welcome = new EmbedBuilder()
       .setColor(isNewAccount ? Colors.CRIMSON : Colors.WHITE)
@@ -73,9 +84,9 @@ export async function execute(member) {
           .setTitle('📥  انضمام عضو')
           .addFields(
             { name: '👤 العضو',      value: `${member} — \`${member.user.tag}\``, inline: false },
-            { name: '🆔 المعرّف',    value: `\`${member.user.id}\``,              inline: true  },
-            { name: '🕐 عمر الحساب', value: `${accountAgeDays} يوم`,             inline: true  },
-            { name: '👥 الأعضاء',   value: `${guild.memberCount}`,               inline: true  },
+            { name: '🆔 المعرّف',    value: `\`${member.user.id}\``,               inline: true  },
+            { name: '🕐 عمر الحساب', value: `${accountAgeDays} يوم`,              inline: true  },
+            { name: '👥 الأعضاء',    value: `${guild.memberCount}`,               inline: true  },
             ...(isNewAccount ? [{ name: '⚠️ تنبيه', value: 'حساب عمره أقل من 7 أيام', inline: false }] : []),
           )
           .setThumbnail(avatarURL)
