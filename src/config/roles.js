@@ -1,109 +1,100 @@
-/**
- * ═══════════════════════════════════════════════════════════════
- *   ملف إعداد الرتب المطور — Guardian & SYS BOT
- * ═══════════════════════════════════════════════════════════════
- */
+import { Events, EmbedBuilder } from 'discord.js';
+import { getConfig } from '../database.js';
+import { getLogChannel } from '../utils/permissions.js';
+import { Colors, alertEmbed } from '../utils/embeds.js';
+import { updateStatusChannels } from '../utils/statusUpdater.js';
 
-export const ROLES = {
-  DEVELOPER:  ['1499391819899998269'],
-  ADMIN:      ['1499391995867697282'],
-  SENIOR_MOD: ['1500142521651826889'],
-  MODERATOR:  ['1499392077858078720'],
-  SUPPORT:    ['1500142106990219335'],
-  TRIAL:      ['1499392183193833493'],
-};
+export const name = Events.GuildMemberAdd;
+export const once = false;
 
-export const COMMAND_ROLES = {
-  // الفئة 1: أوامر النظام
-  eval:       [...ROLES.DEVELOPER],
-  database:   [...ROLES.DEVELOPER],
-  reload:     [...ROLES.DEVELOPER],
+const RAID_WINDOW_MS = 10_000;
+const RAID_THRESHOLD = 10;
+const recentJoins    = new Map();
 
-  // الفئة 2: الإدارة العليا
-  setup:      [...ROLES.DEVELOPER, ...ROLES.ADMIN],
-  settings:   [...ROLES.DEVELOPER, ...ROLES.ADMIN],
-  logs:       [...ROLES.DEVELOPER, ...ROLES.ADMIN, ...ROLES.SENIOR_MOD],
-  
-  // الفئة 3: التحكم بالسيرفر
-  manage_roles:    [...ROLES.DEVELOPER, ...ROLES.ADMIN, ...ROLES.SENIOR_MOD],
-  manage_channels: [...ROLES.DEVELOPER, ...ROLES.ADMIN, ...ROLES.SENIOR_MOD],
-  unban:           [...ROLES.DEVELOPER, ...ROLES.ADMIN, ...ROLES.SENIOR_MOD],
+// أيدي الرتبة التي سيتم منحها تلقائياً
+const AUTO_ROLE_ID = '1499393262476329020';
 
-  // الفئة 4: العقوبات والإشراف
-  ban:        [...ROLES.DEVELOPER, ...ROLES.ADMIN, ...ROLES.SENIOR_MOD, ...ROLES.MODERATOR],
-  kick:       [...ROLES.DEVELOPER, ...ROLES.ADMIN, ...ROLES.SENIOR_MOD, ...ROLES.MODERATOR],
-  timeout:    [...ROLES.DEVELOPER, ...ROLES.ADMIN, ...ROLES.SENIOR_MOD, ...ROLES.MODERATOR],
-  warn:       [...ROLES.DEVELOPER, ...ROLES.ADMIN, ...ROLES.SENIOR_MOD, ...ROLES.MODERATOR],
-  lock:       [...ROLES.DEVELOPER, ...ROLES.ADMIN, ...ROLES.SENIOR_MOD, ...ROLES.MODERATOR],
-  unlock:     [...ROLES.DEVELOPER, ...ROLES.ADMIN, ...ROLES.SENIOR_MOD, ...ROLES.MODERATOR],
-  hide:       [...ROLES.DEVELOPER, ...ROLES.ADMIN, ...ROLES.SENIOR_MOD, ...ROLES.MODERATOR],
-  unhide:     [...ROLES.DEVELOPER, ...ROLES.ADMIN, ...ROLES.SENIOR_MOD, ...ROLES.MODERATOR],
-  nick:       [...ROLES.DEVELOPER, ...ROLES.ADMIN, ...ROLES.SENIOR_MOD, ...ROLES.MODERATOR],
+export async function execute(member) {
+  const { guild } = member;
+  const now = Date.now();
 
-  // الفئة 5: الدعم والصيانة
-  clear:      [...ROLES.DEVELOPER, ...ROLES.ADMIN, ...ROLES.SENIOR_MOD, ...ROLES.MODERATOR, ...ROLES.SUPPORT, ...ROLES.TRIAL],
-  slowmode:   [...ROLES.DEVELOPER, ...ROLES.ADMIN, ...ROLES.SENIOR_MOD, ...ROLES.MODERATOR, ...ROLES.SUPPORT, ...ROLES.TRIAL],
-  ticket:     [...ROLES.DEVELOPER, ...ROLES.ADMIN, ...ROLES.SENIOR_MOD, ...ROLES.MODERATOR, ...ROLES.SUPPORT],
-};
+  // ─── منح الرتبة تلقائياً فور الدخول ─────────────────────────────────────
+  const role = guild.roles.cache.get(AUTO_ROLE_ID);
+  if (role) {
+    member.roles.add(role).catch(() => {
+      console.log(`[FX9-SYS] فشل إضافة الرتبة - تأكد أن رتبة البوت أعلى من الرتبة المراد منحها.`);
+    });
+  }
 
-// ═══════════════════════════════════════════════════════════════
-//  منطق التحكم المتقدم في صلاحيات القنوات
-// ═══════════════════════════════════════════════════════════════
+  // ─── كشف الـ Raid ────────────────────────────────────────────────────────
+  const joins = (recentJoins.get(guild.id) ?? []).filter(t => now - t < RAID_WINDOW_MS);
+  joins.push(now);
+  recentJoins.set(guild.id, joins);
 
-/**
- * 1. الرتب المسموح لها بالكتابة دائماً (حتى أثناء القفل)
- */
-const ALLOWED_ADMINS = [
-  ...ROLES.DEVELOPER,
-  ...ROLES.ADMIN,
-  ...ROLES.SENIOR_MOD,
-  ...ROLES.MODERATOR
-];
+  const modLogCh  = await getLogChannel(guild, getConfig(guild.id, 'modlog_channel'));
+  const logCh     = await getLogChannel(guild, getConfig(guild.id, 'log_channel'));
+  const welcomeCh = await getLogChannel(guild, getConfig(guild.id, 'welcome_channel'));
 
-/**
- * 2. الرتب التي سيتم منعها صراحةً من الكتابة عند القفل
- */
-const RESTRICTED_STAFF = [
-  ...ROLES.SUPPORT,
-  ...ROLES.TRIAL
-];
-
-/**
- * تطبيق نظام الصلاحيات عند قفل القناة
- */
-export async function grantAdminAccess(channel, guild) {
-  // أولاً: منح صلاحية الكتابة للإدارة العليا والمشرفين
-  for (const roleId of ALLOWED_ADMINS) {
-    const role = guild.roles.cache.get(roleId);
-    if (role) {
-      await channel.permissionOverwrites.edit(role, { 
-        SendMessages: true, 
-        ViewChannel: true 
+  if (joins.length >= RAID_THRESHOLD) {
+    const alertCh = modLogCh ?? logCh;
+    if (alertCh) {
+      await alertCh.send({
+        embeds: [
+          alertEmbed('Raid — موجة انضمام مشبوهة!')
+            .setDescription(
+              `انضم **${joins.length} عضو** في أقل من 10 ثوانٍ!\n` +
+              'يُنصح بتفعيل التحقق أو تقييد الدخول مؤقتاً.'
+            )
+            .addFields(
+              { name: '📊 الموجة',     value: `${joins.length} / 10ث`, inline: true },
+              { name: '👥 الإجمالي',    value: `${guild.memberCount}`,   inline: true },
+            )
+        ],
       }).catch(() => {});
     }
   }
 
-  // ثانياً: منع رتب الدعم والمتدربين من الكتابة صراحةً
-  for (const roleId of RESTRICTED_STAFF) {
-    const role = guild.roles.cache.get(roleId);
-    if (role) {
-      await channel.permissionOverwrites.edit(role, { 
-        SendMessages: false 
-      }).catch(() => {});
-    }
-  }
-}
+  const accountAgeDays = Math.floor((now - member.user.createdTimestamp) / 86_400_000);
+  const isNewAccount   = accountAgeDays < 7;
+  const avatarURL      = member.user.displayAvatarURL({ dynamic: true, size: 512 });
 
-/**
- * إزالة كافة القيود (Overwrites) وإعادة القناة لوضعها الطبيعي
- */
-export async function clearAdminOverwrites(channel, guild) {
-  const allStaff = [...ALLOWED_ADMINS, ...RESTRICTED_STAFF];
-  
-  for (const roleId of allStaff) {
-    const overwrite = channel.permissionOverwrites.cache.get(roleId);
-    if (overwrite) {
-      await overwrite.delete().catch(() => {});
-    }
+  // ─── بطاقة الترحيب ─────────────────────────────────
+  if (welcomeCh) {
+    const welcome = new EmbedBuilder()
+      .setColor(isNewAccount ? Colors.CRIMSON : Colors.WHITE)
+      .setDescription(
+        `## 👋 أهلاً بك ${member}\n` +
+        `مرحباً في **${guild.name}**!\n` +
+        `أنت العضو رقم **#${guild.memberCount}**` +
+        (isNewAccount ? '\n\n⚠️ هذا الحساب عمره أقل من 7 أيام' : '')
+      )
+      .setThumbnail(avatarURL)
+      .setTimestamp()
+      .setFooter({ text: `⚔️ FX9-SYS  •  ${guild.name}` });
+
+    await welcomeCh.send({ embeds: [welcome] }).catch(() => {});
   }
+
+  // ─── سجل الانضمام (قناة السجلات العامة) ─────────────────────────────────
+  if (logCh) {
+    await logCh.send({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(isNewAccount ? Colors.CRIMSON : Colors.JOIN)
+          .setTitle('📥  انضمام عضو')
+          .addFields(
+            { name: '👤 العضو',      value: `${member} — \`${member.user.tag}\``, inline: false },
+            { name: '🆔 المعرّف',    value: `\`${member.user.id}\``,               inline: true  },
+            { name: '🕐 عمر الحساب', value: `${accountAgeDays} يوم`,              inline: true  },
+            { name: '👥 الأعضاء',    value: `${guild.memberCount}`,               inline: true  },
+            ...(isNewAccount ? [{ name: '⚠️ تنبيه', value: 'حساب عمره أقل من 7 أيام', inline: false }] : []),
+          )
+          .setThumbnail(avatarURL)
+          .setTimestamp()
+          .setFooter({ text: '⚔️ FX9-SYS  •  السجلات العامة' })
+      ],
+    }).catch(() => {});
+  }
+
+  await updateStatusChannels(guild).catch(() => {});
 }
