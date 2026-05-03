@@ -26,17 +26,18 @@ export async function execute(member) {
     });
   }
 
+  // ─── جلب الإعدادات من قاعدة البيانات ────────────────────────────────────
+  const welcomeChId = getConfig(guild.id, 'welcome_channel');
+  const logChId     = getConfig(guild.id, 'log_channel');
+  const modLogChId  = getConfig(guild.id, 'modlog_channel');
+
   // ─── كشف الـ Raid ────────────────────────────────────────────────────────
   const joins = (recentJoins.get(guild.id) ?? []).filter(t => now - t < RAID_WINDOW_MS);
   joins.push(now);
   recentJoins.set(guild.id, joins);
 
-  const modLogCh  = await getLogChannel(guild, getConfig(guild.id, 'modlog_channel'));
-  const logCh     = await getLogChannel(guild, getConfig(guild.id, 'log_channel'));
-  const welcomeCh = await getLogChannel(guild, getConfig(guild.id, 'welcome_channel'));
-
   if (joins.length >= RAID_THRESHOLD) {
-    const alertCh = modLogCh ?? logCh;
+    const alertCh = await getLogChannel(guild, modLogChId ?? logChId);
     if (alertCh) {
       await alertCh.send({
         embeds: [
@@ -58,42 +59,49 @@ export async function execute(member) {
   const isNewAccount   = accountAgeDays < 7;
   const avatarURL      = member.user.displayAvatarURL({ dynamic: true, size: 512 });
 
-  // ─── بطاقة الترحيب ─────────────────────────────────
-  if (welcomeCh) {
-    const welcome = new EmbedBuilder()
-      .setColor(isNewAccount ? Colors.CRIMSON : Colors.WHITE)
-      .setDescription(
-        `## 👋 أهلاً بك ${member}\n` +
-        `مرحباً في **${guild.name}**!\n` +
-        `أنت العضو رقم **#${guild.memberCount}**` +
-        (isNewAccount ? '\n\n⚠️ هذا الحساب عمره أقل من 7 أيام' : '')
-      )
-      .setThumbnail(avatarURL)
-      .setTimestamp()
-      .setFooter({ text: `⚔️ FX9-SYS  •  ${guild.name}` });
+  // ─── بطاقة الترحيب (تحقق صارم لمنع التكرار) ──────────────────────────────
+  if (welcomeChId) {
+    const welcomeCh = await getLogChannel(guild, welcomeChId);
+    // التأكد أن القناة الموجودة في الكاش هي نفسها المطلوبة حالياً في الداتا بيز
+    if (welcomeCh && welcomeCh.id === welcomeChId) {
+      const welcome = new EmbedBuilder()
+        .setColor(isNewAccount ? Colors.CRIMSON : Colors.WHITE)
+        .setDescription(
+          `## 👋 أهلاً بك ${member}\n` +
+          `مرحباً في **${guild.name}**!\n` +
+          `أنت العضو رقم **#${guild.memberCount}**` +
+          (isNewAccount ? '\n\n⚠️ هذا الحساب عمره أقل من 7 أيام' : '')
+        )
+        .setThumbnail(avatarURL)
+        .setTimestamp()
+        .setFooter({ text: `⚔️ FX9-SYS  •  ${guild.name}` });
 
-    await welcomeCh.send({ embeds: [welcome] }).catch(() => {});
+      await welcomeCh.send({ embeds: [welcome] }).catch(() => {});
+    }
   }
 
   // ─── سجل الانضمام (قناة السجلات العامة) ─────────────────────────────────
-  if (logCh) {
-    await logCh.send({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(isNewAccount ? Colors.CRIMSON : Colors.JOIN)
-          .setTitle('📥  انضمام عضو')
-          .addFields(
-            { name: '👤 العضو',      value: `${member} — \`${member.user.tag}\``, inline: false },
-            { name: '🆔 المعرّف',    value: `\`${member.user.id}\``,               inline: true  },
-            { name: '🕐 عمر الحساب', value: `${accountAgeDays} يوم`,              inline: true  },
-            { name: '👥 الأعضاء',    value: `${guild.memberCount}`,               inline: true  },
-            ...(isNewAccount ? [{ name: '⚠️ تنبيه', value: 'حساب عمره أقل من 7 أيام', inline: false }] : []),
-          )
-          .setThumbnail(avatarURL)
-          .setTimestamp()
-          .setFooter({ text: '⚔️ FX9-SYS  •  السجلات العامة' })
-      ],
-    }).catch(() => {});
+  if (logChId) {
+    const logCh = await getLogChannel(guild, logChId);
+    if (logCh && logCh.id === logChId) {
+      await logCh.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(isNewAccount ? Colors.CRIMSON : Colors.JOIN)
+            .setTitle('📥  انضمام عضو')
+            .addFields(
+              { name: '👤 العضو',      value: `${member} — \`${member.user.tag}\``, inline: false },
+              { name: '🆔 المعرّف',    value: `\`${member.user.id}\``,               inline: true  },
+              { name: '🕐 عمر الحساب', value: `${accountAgeDays} يوم`,              inline: true  },
+              { name: '👥 الأعضاء',    value: `${guild.memberCount}`,               inline: true  },
+              ...(isNewAccount ? [{ name: '⚠️ تنبيه', value: 'حساب عمره أقل من 7 أيام', inline: false }] : []),
+            )
+            .setThumbnail(avatarURL)
+            .setTimestamp()
+            .setFooter({ text: '⚔️ FX9-SYS  •  السجلات العامة' })
+        ],
+      }).catch(() => {});
+    }
   }
 
   await updateStatusChannels(guild).catch(() => {});
